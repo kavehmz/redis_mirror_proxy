@@ -10,4 +10,5 @@ require (
 require (
 	github.com/tidwall/btree v1.1.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
+	gopkg.in/ini.v1 v1.67.0 // indirect
 )

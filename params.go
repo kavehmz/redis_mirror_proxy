@@ -4,13 +4,21 @@ import "flag"
 
 var mainRedis *string
 var mirrorRedis *string
-var addr *string
+var proxyRedis *string
 var buffer *int
 
 func init() {
-	mainRedis = flag.String("main", ":6379", "connection string for the main redis")
-	mirrorRedis = flag.String("mirror", ":6381", "connection string for the main redis")
-	addr = flag.String("addr", ":6380", "connection string for the mirroring service")
+	// Load configuration from file
+	mainRedis, mirrorRedis, proxyRedis = config()
+	// Override undefined values per defaults
+	if *mainRedis == ":" { *mainRedis = ":6379" }
+	if *mirrorRedis == ":" { *mirrorRedis = ":6381" }
+	if *proxyRedis == ":" { *proxyRedis = ":6380" }
+	// Command line arguments has priority over configuration file
+	mainRedis = flag.String("main", *mainRedis, "connection string for the main redis")
+	mirrorRedis = flag.String("mirror", *mirrorRedis, "connection string for the main redis")
+	proxyRedis = flag.String("addr", *proxyRedis, "connection string for the mirroring service")
 	buffer = flag.Int("buff", 500, "Buffer size for mirror queue. If it is full Do commands will be ignored")
+
 	flag.Parse()
 }
