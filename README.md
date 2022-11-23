@@ -1,4 +1,4 @@
-# redis_mirror_proxy
+# roxy
 This redis protocol service will act as a redis service and mirror the commands between two redis servers. Used for zero downtime migration.
 
 Through mirroring we can also do capacity setting of new redis servers.

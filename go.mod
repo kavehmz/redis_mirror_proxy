@@ -1,4 +1,4 @@
-module github.com/kavehmz/redis_mirror_proxy
+module github.com/regentmarkets/roxy
 
 go 1.19
 
