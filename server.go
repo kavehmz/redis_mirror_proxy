@@ -58,23 +58,31 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 		case []byte:
 			conn.WriteBulk(v)
 		case []interface{}:
-			conn.WriteArray(len(v))
-			for _, val := range v {
-				switch v := val.(type) {
-				case int64:
-					conn.WriteInt64(v)
-				case string:
-					conn.WriteString(v)
-				case []byte:
-					conn.WriteBulk(v)
-				}
-			}
+			printValue(v, conn)
 		default:
-			log.Println("This is an unknow type!", v, res)
+			log.Printf("This is an unknow type! %T", v)
 		}
 		return
 	case "subscribe", "psubscribe", "publish":
 		conn.WriteError("Unsupported command")
+	}
+}
+
+func printValue(v []interface{}, conn redcon.Conn) {
+	conn.WriteArray(len(v))
+	for _, val := range v {
+		switch v := val.(type) {
+		case int64:
+			conn.WriteInt64(v)
+		case string:
+			conn.WriteString(v)
+		case []byte:
+			conn.WriteBulk(v)
+		case []interface{}:
+			printValue(v, conn)
+		default:
+			log.Printf("This is an unknow type! %T", v)
+		}
 	}
 }
 
