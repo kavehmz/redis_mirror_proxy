@@ -18,33 +18,29 @@ type rdbDo struct {
 	cmdArgs []interface{}
 }
 
-func scanAndUpdate(mainRedis, mirrorRedis redis.Conn) error {
+func scanAndUpdate(mainRedis, mirrorRedis redis.Conn) {
 	cursor := 0
 	for {
-		keys, err := redis.Values(mainRedis.Do("SCAN", cursor))
+		keys, err := redis.Values(mainRedis.Do("SCAN", cursor, "MATCH", "*"))
 		if err != nil {
-			return err
+			log.Println("Scanning failed from the elasticache:", (err))
 		}
-		// Need help to get the value of the next cursor and the keys
-		cursor, _ = redis.Int(keys[0], nil)
-		keys, _ = redis.Values(keys[1], nil)
 		// Iterate over the keys and update them in the destination
 		for _, key := range keys {
 			value, err := redis.String(mainRedis.Do("GET", key))
 			if err != nil {
-				return err
+				log.Println("Unable get the key/value from elasticache:", (err))
 			}
-			// Update the key in the destination redis
+			// Update keys in the destination redis
 			_, err = mirrorRedis.Do("SET", key, value)
 			if err != nil {
-				return err
+				log.Println("Intial replication got failed on the EC2 Redis:", (err))
 			}
 		}
 		if cursor == 0 {
 			break
 		}
 	}
-	return nil
 }
 
 // This function will process the incoming messages from client. It will act as a multiplexer.
@@ -129,12 +125,8 @@ func redisClose(conn redcon.Conn, err error) {
 	log.Printf("closed: %s, err: %v", conn.RemoteAddr(), err)
 }
 
-// This block needs help
 func fullsync() {
-	sync := scanAndUpdate(mainRedis, mirrorRedis)
-	if sync != nil {
-		log.Println("Initial fullsync failed:", sync.Error())
-	}
+	scanAndUpdate(mainRedis, mirrorRedis)
 }
 
 // This function starts as a goroutine. A concurrent process.
