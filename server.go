@@ -18,6 +18,35 @@ type rdbDo struct {
 	cmdArgs []interface{}
 }
 
+func scanAndUpdate(mainRedis, mirrorRedis redis.Conn) error {
+	cursor := 0
+	for {
+		keys, err := redis.Values(mainRedis.Do("SCAN", cursor))
+		if err != nil {
+			return err
+		}
+		// Get the next cursor and keys
+		cursor, _ = redis.Int(keys[0], nil)
+		keys, _ = redis.Values(keys[1], nil)
+		// Iterate over the keys and update them in the destination
+		for _, key := range keys {
+			value, err := redis.String(mainRedis.Do("GET", key))
+			if err != nil {
+				return err
+			}
+			// Update the key in the destination redis
+			_, err = mirrorRedis.Do("SET", key, value)
+			if err != nil {
+				return err
+			}
+		}
+		if cursor == 0 {
+			break
+		}
+	}
+	return nil
+}
+
 // This function will process the incoming messages from client. It will act as a multiplexer.
 // To get more information refer to:
 // https://redis.io/docs/reference/protocol-spec
@@ -98,6 +127,15 @@ func redisConnect(conn redcon.Conn) bool {
 
 func redisClose(conn redcon.Conn, err error) {
 	log.Printf("closed: %s, err: %v", conn.RemoteAddr(), err)
+}
+
+// This block needs help
+
+func fullsync() {
+	err = scanAndUpdate(mainRedis, mirrorRedis)
+	if err != nil {
+		log.Println("Initial fullsync failed:", (err))
+	}
 }
 
 // This function starts as a goroutine. A concurrent process.
