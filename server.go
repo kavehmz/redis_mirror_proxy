@@ -25,7 +25,7 @@ func scanAndUpdate(mainRedis, mirrorRedis redis.Conn) error {
 		if err != nil {
 			return err
 		}
-		// Get the next cursor and keys
+		// Need help to get the value of the next cursor and the keys
 		cursor, _ = redis.Int(keys[0], nil)
 		keys, _ = redis.Values(keys[1], nil)
 		// Iterate over the keys and update them in the destination
@@ -130,11 +130,10 @@ func redisClose(conn redcon.Conn, err error) {
 }
 
 // This block needs help
-
 func fullsync() {
-	err = scanAndUpdate(mainRedis, mirrorRedis)
-	if err != nil {
-		log.Println("Initial fullsync failed:", (err))
+	sync := scanAndUpdate(mainRedis, mirrorRedis)
+	if sync != nil {
+		log.Println("Initial fullsync failed:", sync.Error())
 	}
 }
 
