@@ -18,26 +18,28 @@ type rdbDo struct {
 	cmdArgs []interface{}
 }
 
+var ps redcon.PubSub
+
 // This function will process the incoming messages from client. It will act as a multiplexer.
 // To get more information refer to:
 // https://redis.io/docs/reference/protocol-spec
 // https://pkg.go.dev/github.com/gomodule/redigo/redis#hdr-Executing_Commands
 func redisCommand(conn redcon.Conn, cmd redcon.Command) {
+	rdbMain := conn.Context().(RedisSettings).redisMain
+
+	cmdArgs := []interface{}{}
+	for _, v := range cmd.Args {
+		cmdArgs = append(cmdArgs, string(v))
+	}
+	res, err := rdbMain.Do(cmdArgs[0].(string), cmdArgs[1:]...)
+	if err != nil {
+		conn.WriteError(err.Error())
+		return
+	}
+	rdbMirror := conn.Context().(RedisSettings).redisMirror
+
 	switch strings.ToLower(string(cmd.Args[0])) {
 	default:
-		rdbMain := conn.Context().(RedisSettings).redisMain
-
-		cmdArgs := []interface{}{}
-		for _, v := range cmd.Args {
-			cmdArgs = append(cmdArgs, string(v))
-		}
-		res, err := rdbMain.Do(cmdArgs[0].(string), cmdArgs[1:]...)
-		if err != nil {
-			conn.WriteError(err.Error())
-			return
-		}
-
-		rdbMirror := conn.Context().(RedisSettings).redisMirror
 		// This will queue the the mirror commands until the channle reaches its capacity.
 		// If channel is full, commands will be ignored
 		select {
@@ -50,39 +52,70 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 			conn.WriteNull()
 			return
 		}
-		switch v := res.(type) {
-		case int64:
-			conn.WriteInt64(v)
-		case string:
-			conn.WriteString(v)
-		case []byte:
-			conn.WriteBulk(v)
-		case []interface{}:
-			printValue(v, conn)
-		default:
-			log.Printf("This is an unknow type! %T", v)
+		printValue(res, conn)
+	case "subscribe", "psubscribe":
+		err := rdbMain.Send(cmdArgs[0].(string), cmdArgs[1:]...)
+		if err != nil {
+			log.Println("Errors", err)
+			conn.WriteError(err.Error())
+			return
 		}
-		return
-	case "subscribe", "psubscribe", "publish":
-		conn.WriteError("Unsupported command")
+		rdbMain.Flush()
+
+		command := strings.ToLower(string(cmd.Args[0]))
+		for i := 1; i < len(cmd.Args); i++ {
+			if command == "psubscribe" {
+				ps.Psubscribe(conn, string(cmd.Args[i]))
+			} else {
+				ps.Subscribe(conn, string(cmd.Args[i]))
+			}
+		}
+
+		for {
+			res, err = rdbMain.Receive()
+			if err != nil {
+				log.Println("Errors", err)
+				conn.WriteError(err.Error())
+				return
+			}
+			cmd := string(res.([]interface{})[0].([]byte))
+			log.Printf("received %+v, %s\n", res, cmd)
+			if cmd == "message" {
+				ps.Publish(string(res.([]interface{})[1].([]byte)), string(res.([]interface{})[2].([]byte)))
+			}
+			if cmd == "pmessage" {
+				ps.Publish(string(res.([]interface{})[2].([]byte)), string(res.([]interface{})[3].([]byte)))
+			}
+		}
 	}
 }
 
-func printValue(v []interface{}, conn redcon.Conn) {
-	conn.WriteArray(len(v))
-	for _, val := range v {
-		switch v := val.(type) {
-		case int64:
-			conn.WriteInt64(v)
-		case string:
-			conn.WriteString(v)
-		case []byte:
-			conn.WriteBulk(v)
-		case []interface{}:
-			printValue(v, conn)
-		default:
-			log.Printf("This is an unknow type! %T", v)
+func printValue(res interface{}, conn redcon.Conn) {
+	switch v := res.(type) {
+	case int64:
+		conn.WriteInt64(v)
+	case string:
+		conn.WriteString(v)
+	case []byte:
+		conn.WriteBulk(v)
+	case []interface{}:
+		conn.WriteArray(len(v))
+		for _, val := range v {
+			switch v := val.(type) {
+			case int64:
+				conn.WriteInt64(v)
+			case string:
+				conn.WriteString(v)
+			case []byte:
+				conn.WriteBulk(v)
+			case []interface{}:
+				printValue(v, conn)
+			default:
+				log.Printf("This is an unknow type! %T", v)
+			}
 		}
+	default:
+		log.Printf("This is an unknow type! %T", v)
 	}
 }
 
