@@ -18,6 +18,7 @@ type rdbDo struct {
 	cmdArgs []interface{}
 }
 
+var mirrorSwitched chan bool = make(chan bool, 1)
 var ps redcon.PubSub
 
 // This function will process the incoming messages from client. It will act as a multiplexer.
@@ -39,6 +40,8 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 			*mode = 1
 		}
 		m.Unlock()
+		mirrorDoQueue <- rdbDo{rdb: nil, cmdArgs: []interface{}{"switch"}}
+		<- mirrorSwitched
 		conn.WriteString("Switched")
 		return
 	}
@@ -164,6 +167,12 @@ func redisClose(conn redcon.Conn, err error) {
 func mirrorDo() {
 	for {
 		mirrorDo := <-mirrorDoQueue
+
+		// Force sync on switch
+		if mirrorDo.cmdArgs[0] == "switch" {
+			mirrorSwitched <- true
+		}
+
 		if mirrorDo.rdb == nil {
 			log.Println("No mirror connection, skipping", mirrorDo.cmdArgs)
 			continue
