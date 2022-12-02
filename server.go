@@ -9,8 +9,7 @@ import (
 )
 
 type RedisSettings struct {
-	redisMain   redis.Conn
-	redisMirror redis.Conn
+	conns map[int]redis.Conn
 }
 
 type rdbDo struct {
@@ -25,7 +24,7 @@ var ps redcon.PubSub
 // https://redis.io/docs/reference/protocol-spec
 // https://pkg.go.dev/github.com/gomodule/redigo/redis#hdr-Executing_Commands
 func redisCommand(conn redcon.Conn, cmd redcon.Command) {
-	rdbMain := conn.Context().(RedisSettings).redisMain
+	rdbMain := conn.Context().(RedisSettings).conns[1]
 
 	cmdArgs := []interface{}{}
 	for _, v := range cmd.Args {
@@ -36,7 +35,7 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 		conn.WriteError(err.Error())
 		return
 	}
-	rdbMirror := conn.Context().(RedisSettings).redisMirror
+	rdbMirror := conn.Context().(RedisSettings).conns[2]
 
 	switch strings.ToLower(string(cmd.Args[0])) {
 	default:
@@ -130,10 +129,7 @@ func redisConnect(conn redcon.Conn) bool {
 		log.Println("Unable to connect to redis mirror:", err.Error())
 	}
 
-	conn.SetContext(RedisSettings{
-		redisMain:   main,
-		redisMirror: mirror,
-	})
+	conn.SetContext(RedisSettings{ conns: map[int]redis.Conn{ 1: main, 2: mirror} })
 	return true
 }
 
