@@ -40,8 +40,8 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 
 	switch strings.ToLower(string(cmd.Args[0])) {
 	default:
-		// This will queue the the mirror commands until the channle reaches its capacity.
-		// If channel is full, commands will be ignored
+		// This will queue the the mirror commands until the channel reaches its capacity.
+		// If channel is full, commands will be ignored and we get log and error
 		select {
 		case mirrorDoQueue <- rdbDo{rdb: rdbMirror, cmdArgs: cmdArgs}:
 		default:
@@ -52,19 +52,24 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 			conn.WriteNull()
 			return
 		}
-		printValue(res, conn)
+		respond(res, conn)
 	case "subscribe", "psubscribe":
 		err := rdbMain.Send(cmdArgs[0].(string), cmdArgs[1:]...)
 		if err != nil {
-			log.Println("Errors", err)
+			log.Println("Unable to send the subscribe command", err)
 			conn.WriteError(err.Error())
 			return
 		}
-		rdbMain.Flush()
+		err = rdbMain.Flush()
+		if err != nil {
+			log.Println("Unable to flush after subscribe", err)
+			conn.WriteError(err.Error())
+			return
+		}
 
-		command := strings.ToLower(string(cmd.Args[0]))
+		subCmd := strings.ToLower(string(cmd.Args[0]))
 		for i := 1; i < len(cmd.Args); i++ {
-			if command == "psubscribe" {
+			if subCmd == "psubscribe" {
 				ps.Psubscribe(conn, string(cmd.Args[i]))
 			} else {
 				ps.Subscribe(conn, string(cmd.Args[i]))
@@ -74,23 +79,28 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 		for {
 			res, err = rdbMain.Receive()
 			if err != nil {
-				log.Println("Errors", err)
+				log.Println("Error in receiving the next message for subscription", err)
 				conn.WriteError(err.Error())
 				return
 			}
-			cmd := string(res.([]interface{})[0].([]byte))
-			log.Printf("received %+v, %s\n", res, cmd)
-			if cmd == "message" {
+			msgType := string(res.([]interface{})[0].([]byte))
+			if msgType == "message" {
+				// In the case of "message", the format is:
+				// [message] [channel] [value]
+				// Like: message mychannelname publishedvalue
 				ps.Publish(string(res.([]interface{})[1].([]byte)), string(res.([]interface{})[2].([]byte)))
 			}
-			if cmd == "pmessage" {
+			if msgType == "pmessage" {
+				// In the case of "pmessage", the format is:
+				// [message] [channel_pattern] [channel] [value]
+				// Like: message mychannelname? mychannelname1 publishedvalue
 				ps.Publish(string(res.([]interface{})[2].([]byte)), string(res.([]interface{})[3].([]byte)))
 			}
 		}
 	}
 }
 
-func printValue(res interface{}, conn redcon.Conn) {
+func respond(res interface{}, conn redcon.Conn) {
 	switch v := res.(type) {
 	case int64:
 		conn.WriteInt64(v)
@@ -109,7 +119,7 @@ func printValue(res interface{}, conn redcon.Conn) {
 			case []byte:
 				conn.WriteBulk(v)
 			case []interface{}:
-				printValue(v, conn)
+				respond(v, conn)
 			default:
 				log.Printf("This is an unknow type! %T", v)
 			}
