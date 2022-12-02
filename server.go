@@ -24,7 +24,14 @@ var ps redcon.PubSub
 // https://redis.io/docs/reference/protocol-spec
 // https://pkg.go.dev/github.com/gomodule/redigo/redis#hdr-Executing_Commands
 func redisCommand(conn redcon.Conn, cmd redcon.Command) {
-	rdbMain := conn.Context().(RedisSettings).conns[1]
+	var rdbMain, rdbMirror redis.Conn
+	if *mode == 1 {
+		rdbMain = conn.Context().(RedisSettings).conns[1]
+		rdbMirror = conn.Context().(RedisSettings).conns[2]
+        } else {
+		rdbMain = conn.Context().(RedisSettings).conns[2]
+		rdbMirror = conn.Context().(RedisSettings).conns[1]
+	}
 
 	cmdArgs := []interface{}{}
 	for _, v := range cmd.Args {
@@ -35,7 +42,6 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 		conn.WriteError(err.Error())
 		return
 	}
-	rdbMirror := conn.Context().(RedisSettings).conns[2]
 
 	switch strings.ToLower(string(cmd.Args[0])) {
 	default:
@@ -119,17 +125,17 @@ func printValue(res interface{}, conn redcon.Conn) {
 }
 
 func redisConnect(conn redcon.Conn) bool {
-	main, err := redis.Dial("tcp", *mainRedis)
+	c1, err := redis.Dial("tcp", *connection1)
 	if err != nil {
 		log.Println(err)
 		return false
 	}
-	mirror, err := redis.Dial("tcp", *mirrorRedis)
+	c2, err := redis.Dial("tcp", *connection2)
 	if err != nil {
 		log.Println("Unable to connect to redis mirror:", err.Error())
 	}
 
-	conn.SetContext(RedisSettings{ conns: map[int]redis.Conn{ 1: main, 2: mirror} })
+	conn.SetContext(RedisSettings{ conns: map[int]redis.Conn{ 1: c1, 2: c2} })
 	return true
 }
 
