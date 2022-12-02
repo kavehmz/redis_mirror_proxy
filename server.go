@@ -6,6 +6,7 @@ import (
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/tidwall/redcon"
+	"sync"
 )
 
 type RedisSettings struct {
@@ -24,6 +25,24 @@ var ps redcon.PubSub
 // https://redis.io/docs/reference/protocol-spec
 // https://pkg.go.dev/github.com/gomodule/redigo/redis#hdr-Executing_Commands
 func redisCommand(conn redcon.Conn, cmd redcon.Command) {
+	cmdArgs := []interface{}{}
+	for _, v := range cmd.Args {
+		cmdArgs = append(cmdArgs, string(v))
+	}
+
+	if strings.ToLower(string(cmd.Args[0])) == "switch" {
+		var m sync.Mutex
+		m.Lock()
+		if *mode == 1 {
+			*mode = 2
+		} else {
+			*mode = 1
+		}
+		m.Unlock()
+		conn.WriteString("Switched")
+		return
+	}
+
 	var rdbMain, rdbMirror redis.Conn
 	if *mode == 1 {
 		rdbMain = conn.Context().(RedisSettings).conns[1]
@@ -33,10 +52,7 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 		rdbMirror = conn.Context().(RedisSettings).conns[1]
 	}
 
-	cmdArgs := []interface{}{}
-	for _, v := range cmd.Args {
-		cmdArgs = append(cmdArgs, string(v))
-	}
+
 	res, err := rdbMain.Do(cmdArgs[0].(string), cmdArgs[1:]...)
 	if err != nil {
 		conn.WriteError(err.Error())
