@@ -3,24 +3,24 @@ package main
 import (
 	"log"
 	"strings"
+	"sync/atomic"
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/tidwall/redcon"
-	"sync"
 )
 
 type RedisSettings struct {
-	conns map[int]redis.Conn
+	conns     map[int]redis.Conn
+	replyChan chan reply
 }
 
-type rdbDo struct {
-	rdb     redis.Conn
-	cmdArgs []interface{}
+type reply struct {
+	res interface{}
+	err error
 }
 
-var mirrorSwitched chan bool = make(chan bool, 1)
 var ps redcon.PubSub
-var m sync.Mutex
+var mode atomic.Int32
 
 // This function will process the incoming messages from client. It will act as a multiplexer.
 // To get more information refer to:
@@ -32,63 +32,50 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 		cmdArgs = append(cmdArgs, string(v))
 	}
 
-	if strings.ToLower(string(cmd.Args[0])) == "switch" {
-		m.Lock()
-		if *mode == 1 {
-			*mode = 2
-		} else {
-			*mode = 1
-		}
-		mirrorDoQueue <- rdbDo{rdb: nil, cmdArgs: []interface{}{"switch"}}
-		<- mirrorSwitched
-		conn.WriteString("Switched")
-		m.Unlock()
-		return
-	}
-
-	var rdbMain, rdbMirror redis.Conn
-	if *mode == 1 {
-		rdbMain = conn.Context().(RedisSettings).conns[1]
-		rdbMirror = conn.Context().(RedisSettings).conns[2]
-        } else {
-		rdbMain = conn.Context().(RedisSettings).conns[2]
-		rdbMirror = conn.Context().(RedisSettings).conns[1]
-	}
-
-
-	res, err := rdbMain.Do(cmdArgs[0].(string), cmdArgs[1:]...)
-	if err != nil {
-		conn.WriteError(err.Error())
-		return
-	}
-
 	switch strings.ToLower(string(cmd.Args[0])) {
 	default:
-		// This will queue the the mirror commands until the channel reaches its capacity.
-		// If channel is full, commands will be ignored and we get log and error
-		select {
-		case mirrorDoQueue <- rdbDo{rdb: rdbMirror, cmdArgs: cmdArgs}:
-		default:
-			log.Println("Queue full, skipping", cmdArgs)
+		mainQueue <- mainCmd{conn: conn, cmdArgs: cmdArgs}
+		rep := <-conn.Context().(RedisSettings).replyChan
+		res := rep.res
+		err := rep.err
+		if err != nil {
+			conn.WriteError(err.Error())
+			return
 		}
-
 		if res == nil {
 			conn.WriteNull()
 			return
 		}
-		respond(res, conn)
+		respond(rep.res, conn)
+	// return the number of queue commands in mirror queue
+	case "qlen":
+		conn.WriteInt(len(mirrorQueue))
+	case "switch":
+		switchConnections()
+		conn.WriteString("Switch is done")
 	case "subscribe", "psubscribe":
-		err := rdbMain.Send(cmdArgs[0].(string), cmdArgs[1:]...)
+		// subscribe to both redises to eliminte the need of any action in case of switch
+		err := pickMain(conn).Send(cmdArgs[0].(string), cmdArgs[1:]...)
 		if err != nil {
 			log.Println("Unable to send the subscribe command", err)
 			conn.WriteError(err.Error())
 			return
 		}
-		err = rdbMain.Flush()
+		err = pickMain(conn).Flush()
 		if err != nil {
 			log.Println("Unable to flush after subscribe", err)
 			conn.WriteError(err.Error())
 			return
+		}
+
+		err = pickMirror(conn).Send(cmdArgs[0].(string), cmdArgs[1:]...)
+		if err != nil {
+			log.Println("Unable to send the subscribe command in mirror", err)
+		}
+		err = pickMirror(conn).Flush()
+		if err != nil {
+			log.Println("Unable to flush after subscribe in mirorr", err)
+
 		}
 
 		subCmd := strings.ToLower(string(cmd.Args[0]))
@@ -100,28 +87,69 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 			}
 		}
 
-		for {
-			res, err = rdbMain.Receive()
-			if err != nil {
-				log.Println("Error in receiving the next message for subscription", err)
-				conn.WriteError(err.Error())
-				return
+		// receive main
+		go func(conn redcon.Conn) {
+			for {
+				res, err := pickMain(conn).Receive()
+				if err != nil {
+					log.Println("Error in receiving the next message for subscription", err)
+					conn.WriteError(err.Error())
+					return
+				}
+				msgType := string(res.([]interface{})[0].([]byte))
+				if msgType == "message" {
+					// In the case of "message", the format is:
+					// [message] [channel] [value]
+					// Like: message mychannelname publishedvalue
+					ps.Publish(string(res.([]interface{})[1].([]byte)), string(res.([]interface{})[2].([]byte)))
+				}
+				if msgType == "pmessage" {
+					// In the case of "pmessage", the format is:
+					// [message] [channel_pattern] [channel] [value]
+					// Like: message mychannelname? mychannelname1 publishedvalue
+					ps.Publish(string(res.([]interface{})[2].([]byte)), string(res.([]interface{})[3].([]byte)))
+				}
 			}
-			msgType := string(res.([]interface{})[0].([]byte))
-			if msgType == "message" {
-				// In the case of "message", the format is:
-				// [message] [channel] [value]
-				// Like: message mychannelname publishedvalue
-				ps.Publish(string(res.([]interface{})[1].([]byte)), string(res.([]interface{})[2].([]byte)))
+		}(conn)
+		// receive mirror
+		go func(conn redcon.Conn) {
+			for {
+				res, err := pickMirror(conn).Receive()
+				if err != nil {
+					log.Println("Error in receiving the next message for subscription", err)
+					conn.WriteError(err.Error())
+					return
+				}
+				msgType := string(res.([]interface{})[0].([]byte))
+				if msgType == "message" {
+					// In the case of "message", the format is:
+					// [message] [channel] [value]
+					// Like: message mychannelname publishedvalue
+					ps.Publish(string(res.([]interface{})[1].([]byte)), string(res.([]interface{})[2].([]byte)))
+				}
+				if msgType == "pmessage" {
+					// In the case of "pmessage", the format is:
+					// [message] [channel_pattern] [channel] [value]
+					// Like: message mychannelname? mychannelname1 publishedvalue
+					ps.Publish(string(res.([]interface{})[2].([]byte)), string(res.([]interface{})[3].([]byte)))
+				}
 			}
-			if msgType == "pmessage" {
-				// In the case of "pmessage", the format is:
-				// [message] [channel_pattern] [channel] [value]
-				// Like: message mychannelname? mychannelname1 publishedvalue
-				ps.Publish(string(res.([]interface{})[2].([]byte)), string(res.([]interface{})[3].([]byte)))
-			}
-		}
+		}(conn)
 	}
+}
+
+func pickMain(conn redcon.Conn) redis.Conn {
+	if mode.Load()%2 == 0 {
+		return conn.Context().(RedisSettings).conns[1]
+	}
+	return conn.Context().(RedisSettings).conns[2]
+}
+
+func pickMirror(conn redcon.Conn) redis.Conn {
+	if mode.Load()%2 == 0 {
+		return conn.Context().(RedisSettings).conns[2]
+	}
+	return conn.Context().(RedisSettings).conns[1]
 }
 
 func respond(res interface{}, conn redcon.Conn) {
@@ -154,42 +182,20 @@ func respond(res interface{}, conn redcon.Conn) {
 }
 
 func redisConnect(conn redcon.Conn) bool {
-	c1, err := redis.Dial("tcp", *connection1)
+	c1, err := redis.Dial("tcp", *redisAddr1)
 	if err != nil {
 		log.Println(err)
 		return false
 	}
-	c2, err := redis.Dial("tcp", *connection2)
+	c2, err := redis.Dial("tcp", *redisAddr2)
 	if err != nil {
 		log.Println("Unable to connect to redis mirror:", err.Error())
 	}
 
-	conn.SetContext(RedisSettings{ conns: map[int]redis.Conn{ 1: c1, 2: c2} })
+	conn.SetContext(RedisSettings{conns: map[int]redis.Conn{1: c1, 2: c2}, replyChan: make(chan reply)})
 	return true
 }
 
 func redisClose(conn redcon.Conn, err error) {
 	log.Printf("closed: %s, err: %v", conn.RemoteAddr(), err)
-}
-
-// This function starts as a goroutine. A concurrent process.
-// mirrorDo loops forever and run the queued commands against the mirror redis
-func mirrorDo() {
-	for {
-		mirrorDo := <-mirrorDoQueue
-
-		// Force sync on switch
-		if mirrorDo.cmdArgs[0] == "switch" {
-			mirrorSwitched <- true
-		}
-
-		if mirrorDo.rdb == nil {
-			log.Println("No mirror connection, skipping", mirrorDo.cmdArgs)
-			continue
-		}
-		_, errMirror := mirrorDo.rdb.Do(mirrorDo.cmdArgs[0].(string), mirrorDo.cmdArgs[1:]...)
-		if errMirror != nil {
-			log.Println("Mirror Do failed:", errMirror.Error())
-		}
-	}
 }

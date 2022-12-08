@@ -6,14 +6,16 @@ import (
 	"github.com/tidwall/redcon"
 )
 
-var mirrorDoQueue chan rdbDo
+var mirrorQueue chan mirrorCmd
+var mainQueue chan mainCmd
 
 func main() {
 	log.Printf("started server at %s", *addr)
 	// Create a channel do mirror commands with capacity of *buffer to receive the mirrored commands
-	mirrorDoQueue = make(chan rdbDo, *buffer)
-	// Starting a separate goroutine to process the mirror commands
-	go mirrorDo()
+	mirrorQueue = make(chan mirrorCmd, *buffer)
+	mainQueue = make(chan mainCmd, *buffer)
+
+	initQueues()
 	err := redcon.ListenAndServe(*addr,
 		redisCommand,
 		redisConnect,
