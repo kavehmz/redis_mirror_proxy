@@ -6,11 +6,11 @@ import (
 
 	"github.com/gomodule/redigo/redis"
 	"github.com/tidwall/redcon"
+	"sync"
 )
 
 type RedisSettings struct {
-	redisMain   redis.Conn
-	redisMirror redis.Conn
+	conns map[int]redis.Conn
 }
 
 type rdbDo struct {
@@ -18,25 +18,49 @@ type rdbDo struct {
 	cmdArgs []interface{}
 }
 
+var mirrorSwitched chan bool = make(chan bool, 1)
 var ps redcon.PubSub
+var m sync.Mutex
 
 // This function will process the incoming messages from client. It will act as a multiplexer.
 // To get more information refer to:
 // https://redis.io/docs/reference/protocol-spec
 // https://pkg.go.dev/github.com/gomodule/redigo/redis#hdr-Executing_Commands
 func redisCommand(conn redcon.Conn, cmd redcon.Command) {
-	rdbMain := conn.Context().(RedisSettings).redisMain
-
 	cmdArgs := []interface{}{}
 	for _, v := range cmd.Args {
 		cmdArgs = append(cmdArgs, string(v))
 	}
+
+	if strings.ToLower(string(cmd.Args[0])) == "switch" {
+		m.Lock()
+		if *mode == 1 {
+			*mode = 2
+		} else {
+			*mode = 1
+		}
+		mirrorDoQueue <- rdbDo{rdb: nil, cmdArgs: []interface{}{"switch"}}
+		<- mirrorSwitched
+		conn.WriteString("Switched")
+		m.Unlock()
+		return
+	}
+
+	var rdbMain, rdbMirror redis.Conn
+	if *mode == 1 {
+		rdbMain = conn.Context().(RedisSettings).conns[1]
+		rdbMirror = conn.Context().(RedisSettings).conns[2]
+        } else {
+		rdbMain = conn.Context().(RedisSettings).conns[2]
+		rdbMirror = conn.Context().(RedisSettings).conns[1]
+	}
+
+
 	res, err := rdbMain.Do(cmdArgs[0].(string), cmdArgs[1:]...)
 	if err != nil {
 		conn.WriteError(err.Error())
 		return
 	}
-	rdbMirror := conn.Context().(RedisSettings).redisMirror
 
 	switch strings.ToLower(string(cmd.Args[0])) {
 	default:
@@ -130,20 +154,17 @@ func respond(res interface{}, conn redcon.Conn) {
 }
 
 func redisConnect(conn redcon.Conn) bool {
-	main, err := redis.Dial("tcp", *mainRedis)
+	c1, err := redis.Dial("tcp", *connection1)
 	if err != nil {
 		log.Println(err)
 		return false
 	}
-	mirror, err := redis.Dial("tcp", *mirrorRedis)
+	c2, err := redis.Dial("tcp", *connection2)
 	if err != nil {
 		log.Println("Unable to connect to redis mirror:", err.Error())
 	}
 
-	conn.SetContext(RedisSettings{
-		redisMain:   main,
-		redisMirror: mirror,
-	})
+	conn.SetContext(RedisSettings{ conns: map[int]redis.Conn{ 1: c1, 2: c2} })
 	return true
 }
 
@@ -156,6 +177,12 @@ func redisClose(conn redcon.Conn, err error) {
 func mirrorDo() {
 	for {
 		mirrorDo := <-mirrorDoQueue
+
+		// Force sync on switch
+		if mirrorDo.cmdArgs[0] == "switch" {
+			mirrorSwitched <- true
+		}
+
 		if mirrorDo.rdb == nil {
 			log.Println("No mirror connection, skipping", mirrorDo.cmdArgs)
 			continue
