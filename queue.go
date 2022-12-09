@@ -59,7 +59,7 @@ func mainDo(i int) {
 		select {
 		case next := <-mainQueue:
 			res, err := pickMain(next.conn).Do(next.cmdArgs[0].(string), next.cmdArgs[1:]...)
-			if err != nil {
+			if err == nil {
 				// This will queue the the mirror commands until the channel reaches its capacity.
 				// If channel is full, commands will be ignored and we get log and error
 				select {
