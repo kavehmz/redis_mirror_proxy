@@ -15,7 +15,7 @@ $ docker run --rm --name redis-mirror -p 6381:6379 redis
 
 # complile and run the mirror service in docker
 $ docker run -ti --rm -v $PWD/:/ws --workdir /ws -p 6380:6380 golang:1 go run *.go \
-     -main host.docker.internal:6379 -mirror host.docker.internal:6381 -addr :6380
+     -redis1 host.docker.internal:6379 -redis2 host.docker.internal:6381 -addr :6380
 
 
 # connect to the redis-mirror service (6380)
