@@ -1,8 +1,13 @@
 package main
 
-import "sync"
+import (
+	"sync"
+)
+
+var onlyOneSwitch = make(chan bool, 1)
 
 func switchConnections() {
+	onlyOneSwitch <- true
 	var wg sync.WaitGroup
 	for i := 0; i < N; i++ {
 		wg.Add(1)
@@ -26,4 +31,5 @@ func switchConnections() {
 		contMain[i] <- true
 		contMirror[i] <- true
 	}
+	<-onlyOneSwitch
 }
