@@ -54,7 +54,7 @@ func redisCommand(conn redcon.Conn, cmd redcon.Command) {
 		switchConnections()
 		conn.WriteString("Switch is done")
 	case "subscribe", "psubscribe":
-		// subscribe to both redises to eliminte the need of any action in case of switch
+		// subscribe to both redises to eliminate the need of any action in case of switch
 		err := pickMain(conn).Send(cmdArgs[0].(string), cmdArgs[1:]...)
 		if err != nil {
 			log.Println("Unable to send the subscribe command", err)
@@ -197,5 +197,5 @@ func redisConnect(conn redcon.Conn) bool {
 }
 
 func redisClose(conn redcon.Conn, err error) {
-	log.Printf("closed: %s, err: %v", conn.RemoteAddr(), err)
+	log.Printf("Closed: %s, err: %v", conn.RemoteAddr(), err)
 }
