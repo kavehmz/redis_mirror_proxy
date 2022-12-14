@@ -10,7 +10,7 @@ var mirrorQueue chan mirrorCmd
 var mainQueue chan mainCmd
 
 func main() {
-	log.Printf("started server at %s", *addr)
+	log.Printf("Started server at %s", *addr)
 	// Create a channel do mirror commands with capacity of *buffer to receive the mirrored commands
 	mirrorQueue = make(chan mirrorCmd, *buffer)
 	mainQueue = make(chan mainCmd, *buffer)
