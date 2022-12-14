@@ -1,7 +1,7 @@
 # roxy
 This redis protocol service will act as a redis service and mirror the commands between two redis servers. Used for zero downtime migration.
 
-Through mirroring we can also do capacity setting of new redis servers.
+Through mirroring we can we can migrate between Redis instances without downtime when replication is not an option (e.x ElasticCache), or do capacity check in a safe way. Commands will mirror in the second redis in an async and non-fatal way.
 
 # Diagram
 
