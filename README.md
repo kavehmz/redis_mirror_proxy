@@ -3,6 +3,10 @@ This redis protocol service will act as a redis service and mirror the commands 
 
 Through mirroring we can also do capacity setting of new redis servers.
 
+# Diagram
+
+![alt text](diagram/out.png)
+
 # Demo
 
 Note: you will only need docker to test the setup
