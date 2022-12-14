@@ -1,0 +1,57 @@
+# diagram scripting tool: https://github.com/terrastruct/d2/
+redis1: Redis 1 {
+    shape: cylinder
+}
+redis2: Redis 2 {
+    shape: cylinder
+}
+
+roxy: Roxy {
+    shape: cylinder
+}
+
+roxy->redis1
+roxy->redis2
+
+redis-cli1: redis-cli {
+    shape: person
+}
+redis-cli2: redis-cli {
+    shape: person
+}
+redis-cli3: redis-cli {
+    shape: person
+}
+
+redis-cli1->roxy
+redis-cli2->roxy
+redis-cli3->roxy
+
+redis-cli1-code: |`bash
+    SET KEY VAL
+    `|
+redis-cli2-code: |`bash
+    GET KEY
+    `|
+redis-cli3-code: |`bash
+    # Switch the main redis from 1 to 2
+    SWITCH
+    `|
+
+
+redis-cli1-code->redis-cli1
+redis-cli2-code->redis-cli2
+redis-cli3-code->redis-cli3
+
+explanation: |`text
+    At first Redis 1 acts as the main redis. mirrored comamnds to
+    Redis 2 will be async and can fail without erroring the clients.
+    After SWITCH command, first mirror queue will get empty and then
+    role of Redis 1 and 2 will change.
+`| {
+    near: redis1
+}
+
+redis1->explanation
+redis2->explanation
+
