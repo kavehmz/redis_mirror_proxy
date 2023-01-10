@@ -1,4 +1,4 @@
-module github.com/regentmarkets/roxy
+module github.com/kavehmz/roxy
 
 go 1.19
 
